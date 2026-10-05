@@ -69,6 +69,13 @@ async function run(args, { knownTypes = PLUGIN_TYPES, nullLabels = [], throwLabe
     }
     if (nullLabels.includes(opts.label)) return null
     if (override[opts.label]) return override[opts.label](opts.schema)
+    if (opts.label.endsWith(' verify')) {
+      // Like a real skeptic, answer only for the items in the prompt:
+      // confirmed, plausible, refuted, in turn.
+      const marker = Math.max(prompt.lastIndexOf('Findings:\n'), prompt.lastIndexOf('Claims:\n'))
+      const items = JSON.parse(prompt.slice(prompt.indexOf('\n', marker) + 1))
+      return { verdicts: items.map((item, n) => ({ index: item.index, verdict: ['confirmed', 'plausible', 'refuted'][n % 3], reason: 'checked' })) }
+    }
     return opts.schema ? fake(opts.schema) : `# report from ${opts.label}`
   }
   const parallel = thunks => Promise.all(thunks.map(t => Promise.resolve().then(t).catch(() => null)))
@@ -115,15 +122,50 @@ await test('review defaults: map, 4 plugin specialists, 4 verifiers, 1 chair', a
   assert.deepEqual(labels(r), ['architect', 'architect verify', 'backend', 'backend verify', 'chair', 'map', 'performance', 'performance verify', 'security', 'security verify'])
   assert.deepEqual(r.calls.filter(c => c.phase === 'Specialists').map(c => c.agentType).sort(), [...PLUGIN_TYPES].sort())
   assert.equal(r.result.mode, 'review')
-  assert.equal(r.result.kept.length, 8) // per lens: confirmed + plausible kept
-  assert.equal(r.result.refuted.length, 4)
+  // Per lens the fake raises high, medium and low findings: the skeptic sees
+  // the first two (confirmed, plausible) and the low one stays unverified.
+  assert.equal(r.result.kept.length, 12)
+  assert.equal(r.result.refuted.length, 0)
   assert.deepEqual(r.result.missing, [])
   assert.deepEqual(r.result.skipped, [])
   assert.match(prompt(r, 'backend'), /git diff HEAD/)
   assert.match(prompt(r, 'backend'), /rest of the panel covers/)
-  assert.match(prompt(r, 'chair'), /refuted 4/)
+  assert.match(prompt(r, 'chair'), /refuted 0/)
+  assert.match(prompt(r, 'chair'), /low-severity findings, which skip the skeptic/)
   assert(!prompt(r, 'chair').includes('Lenses not on the panel'))
-  assert.match(prompt(r, 'backend verify'), /"index": 2/)
+})
+
+await test('low findings skip the skeptic, which runs at medium effort', async () => {
+  const r = await run(undefined)
+  const verify = r.calls.find(c => c.label === 'backend verify')
+  assert.equal(verify.effort, 'medium')
+  assert.match(verify.prompt, /"index": 1/)
+  assert(!verify.prompt.includes('"index": 2'), 'a low finding was sent to the skeptic')
+  const backend = r.result.kept.filter(f => f.lens === 'backend')
+  assert.deepEqual(backend.map(f => `${f.severity}:${f.verdict}`), ['high:confirmed', 'medium:plausible', 'low:unverified'])
+  assert(r.logs.includes('backend: 3 raised, 2 checked, 3 kept, 0 refuted (1 low left unverified)'))
+})
+
+await test('a refuted finding leaves the report', async () => {
+  const r = await run(undefined, {
+    override: { 'backend verify': () => ({ verdicts: [{ index: 0, verdict: 'refuted', reason: 'cannot happen' }, { index: 1, verdict: 'confirmed', reason: 'read it' }] }) },
+  })
+  assert.deepEqual(r.result.refuted.map(f => `${f.lens}:${f.title}`), ['backend:title-0'])
+  assert(!r.result.kept.some(f => f.lens === 'backend' && f.title === 'title-0'))
+  assert.match(prompt(r, 'chair'), /refuted 1/)
+})
+
+await test('when every finding is low, no skeptic runs', async () => {
+  const lowOnly = s => {
+    const out = fake(s)
+    out.findings = out.findings.map(f => ({ ...f, severity: 'low' }))
+    return out
+  }
+  const r = await run(undefined, { override: { backend: lowOnly } })
+  assert(!r.calls.some(c => c.label === 'backend verify'))
+  assert(r.result.kept.filter(f => f.lens === 'backend').every(f => f.verdict === 'unverified'))
+  assert(r.logs.includes('backend: 3 raised, 0 checked, 3 kept, 0 refuted (3 low left unverified)'))
+  assert(!r.logs.some(l => l.startsWith('backend:') && l.includes('verifier failed')))
 })
 
 await test('the map runs Graphify locally and stays a map', async () => {
@@ -134,6 +176,7 @@ await test('the map runs Graphify locally and stays a map', async () => {
   assert.match(p, /Never run a semantic or docs pass/)
   assert.match(p, /\.git\/info\/exclude/)
   assert.match(p, /graphify query/)
+  assert.match(p, /otherwise run `graphify god-nodes`/)
   assert.match(p, /do not review it/)
   assert.equal(r.calls.find(c => c.label === 'map').effort, 'medium')
   assert(r.logs.some(l => l.startsWith('map: Graphify ·')))
@@ -303,6 +346,7 @@ await test('learn mode: selected lenses map claims, study plan', async () => {
   assert.match(prompt(r, 'map'), /structure: modules, boundaries/)
   assert.match(prompt(r, 'architect'), /Target: the whole repository/)
   assert.match(prompt(r, 'architect verify'), /learning panel/)
+  assert.match(prompt(r, 'architect verify'), /"index": 2/) // claims have no severity: all are checked
   assert.match(prompt(r, 'chair'), /Study plan/)
   assert.match(prompt(r, 'chair'), /no security surface/)
 })

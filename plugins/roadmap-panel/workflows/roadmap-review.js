@@ -274,7 +274,7 @@ Target: ${target}${focus}
 1. Graph. Work at the repository root (\`git rev-parse --show-toplevel\`). If the \`graphify\` command exists:
    - Refresh the graph: run \`graphify update .\` when graphify-out/graph.json exists, otherwise \`graphify extract . --code-only\`. Both parse code locally with tree-sitter: no API key, and nothing leaves the machine. Never run a semantic or docs pass.
    - Keep graphify-out/ out of git: if \`git check-ignore -q graphify-out\` fails, append "graphify-out/" to .git/info/exclude.
-   - Read graphify-out/GRAPH_REPORT.md for the structure. Then run \`graphify query "<question>" --budget 1500\` and \`graphify explain "<symbol>"\` for the target's neighborhood.
+   - For the structure, read graphify-out/GRAPH_REPORT.md if it exists; otherwise run \`graphify god-nodes\`. Then run \`graphify query "<question>" --budget 1500\` and \`graphify explain "<symbol>"\` for the target's neighborhood.
    Set "graph" to "graphify". If the command is missing or fails, set "graph" to "none" and use git and rg instead.
 2. Scope. Identify the exact files and symbols involved, their callers and dependencies, and the project rules that apply (CLAUDE.md, CONTRIBUTING, ADRs). Treat graph output as leads and confirm each one in the code.
 3. Panel. Decide which specialists the work needs. Give a one-sentence reason for each lens you choose ("lenses") and for each you skip ("skipped"):
@@ -375,7 +375,7 @@ ${json(items)}`,
   synth: ({ kept, doneWell, refutedCount }) => `You chair a roadmap review panel. The specialists reviewed: ${target}
 A skeptic checked every finding and refuted ${refutedCount}. Write the final report from this data only; do not add findings.
 
-Findings that survived (verdict confirmed, plausible or unverified):
+Findings that survived. The verdict is confirmed or plausible when a skeptic checked the finding. It is unverified for low-severity findings, which skip the skeptic, and when the skeptic failed:
 ${json(kept)}
 
 Done well:
@@ -439,13 +439,16 @@ async function runChecked(cfg) {
       const items = out[cfg.itemsKey] || []
       if (out.omitted) log(`${s.key}: left out ${out.omitted} lower-priority items (item limit)`)
       if (!items.length) return { s, out, kept: [], refuted: [] }
-      const verdicts = await agent(cfg.verify(s, items.map((item, index) => ({ index, ...item }))), {
-        label: `${s.key} verify`,
-        phase: 'Challenge',
-        schema: VERDICTS_SCHEMA,
-      })
+      // Skeptics cost about as much as specialists, so they check only what
+      // matters: low findings stay unverified. Learn claims carry no
+      // severity and are all checked.
+      const toCheck = items.map((item, index) => ({ index, ...item })).filter(item => item.severity !== 'low')
+      const verdicts = toCheck.length
+        ? await agent(cfg.verify(s, toCheck), { label: `${s.key} verify`, phase: 'Challenge', schema: VERDICTS_SCHEMA, effort: 'medium' })
+        : null
       const checked = applyVerdicts(items, verdicts)
-      log(`${s.key}: ${items.length} raised, ${checked.kept.length} kept, ${checked.refuted.length} refuted${verdicts ? '' : ' (verifier failed, kept as unverified)'}`)
+      const lows = items.length - toCheck.length
+      log(`${s.key}: ${items.length} raised, ${toCheck.length} checked, ${checked.kept.length} kept, ${checked.refuted.length} refuted${lows ? ` (${lows} low left unverified)` : ''}${toCheck.length && !verdicts ? ' (verifier failed, kept as unverified)' : ''}`)
       return { s, out, ...checked }
     },
   )

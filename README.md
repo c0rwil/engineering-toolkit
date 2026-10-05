@@ -153,9 +153,11 @@ Map ──▶ Specialists ──▶ Challenge ──▶ Synthesize
    the brief plus only the hotspots meant for it, and treats the brief as leads
    to confirm in code, not as facts. Every finding cites `file:line`, a
    concrete failure scenario, a fix, the roadmap topic and a one-line lesson.
-3. **Challenge.** A skeptic tries to refute each specialist's findings by
-   reading the cited code. Anything it can't confirm is dropped; findings that
-   depend on conditions it can't check are kept as *plausible*. In design mode,
+3. **Challenge.** A skeptic tries to refute each specialist's high- and
+   medium-severity findings by reading the cited code. Anything it can't
+   confirm is dropped; findings that depend on conditions it can't check are
+   kept as *plausible*. Low-severity findings skip the skeptic and are marked
+   *unverified*. In learn mode the skeptic checks every claim. In design mode,
    a red team attacks the proposals instead, looking for conflicts, gaps, risks
    and over-engineering.
 4. **Synthesize.** A chair merges duplicates across lenses, ranks the findings
@@ -164,12 +166,17 @@ Map ──▶ Specialists ──▶ Challenge ──▶ Synthesize
 
 ## Cost and tips
 
-These runs are thorough, not cheap. In testing, one specialist reviewing one
-commit took about 30 minutes and roughly 400k tokens, because the skeptic
-reproduced the bug it was checking. The automatic panel keeps that down: every
-specialist the map skips also skips its skeptic, so a change that needs one
-lens runs 4 agents instead of 10, and a change that needs none stops after the
-map. Building the Graphify graph costs no tokens because it is local parsing,
+These runs are thorough, not cheap. In testing (version 0.2.0), a full
+four-specialist review of a broad 632-line commit took 44 minutes and about
+2M tokens, and found 21 verified issues, 3 of them high severity. The map step
+was 88k tokens of that, each specialist used 150-260k, and the skeptics used
+44% of the total. Since 0.3.0, skeptics check only high- and medium-severity
+findings, at medium effort, to cut that share. That change hasn't been
+re-measured yet.
+
+The automatic panel keeps focused changes cheaper: every specialist the map
+skips also skips its skeptic, so a change that needs one lens runs 4 agents
+instead of 10, and a change that needs none stops after the map. Building the Graphify graph costs no tokens because it is local parsing,
 and later runs only re-parse the files that changed; the map step is one agent
 reading that graph.
 
