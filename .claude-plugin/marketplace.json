@@ -1,0 +1,18 @@
+{
+  "name": "engineering-toolkit",
+  "owner": {
+    "name": "c0rwil"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for engineering review and learning.",
+    "version": "0.2.0"
+  },
+  "plugins": [
+    {
+      "name": "roadmap-panel",
+      "source": "./plugins/roadmap-panel",
+      "description": "roadmap.sh specialist agents and the roadmap-review workflow: maps your repo with Graphify, picks the specialists the work needs, then reviews a change, red-teams a design, or maps a codebase to the roadmaps.",
+      "version": "0.2.0"
+    }
+  ]
+}
