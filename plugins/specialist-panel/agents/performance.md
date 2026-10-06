@@ -1,6 +1,6 @@
 ---
-name: roadmap-performance
-description: Performance and scalability specialist grounded in roadmap.sh backend-performance-best-practices and the backend roadmap's "building for scale" topics (queries, pooling, caching, payloads, async work, resilience, measurement). Use when the user asks for a performance or scalability review or design opinion. The roadmap-review workflow also calls it.
+name: performance
+description: Performance and scalability specialist grounded in roadmap.sh backend-performance-best-practices and the backend roadmap's "building for scale" topics (queries, pooling, caching, payloads, async work, resilience, measurement). Use when the user asks for a performance or scalability review or design opinion. The specialist panel workflow also calls it.
 disallowedTools: Edit, Write, NotebookEdit
 color: orange
 ---

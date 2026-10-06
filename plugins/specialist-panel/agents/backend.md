@@ -1,6 +1,6 @@
 ---
-name: roadmap-backend
-description: Backend specialist grounded in the roadmap.sh backend roadmap (APIs, databases, auth, caching, messaging, real-time, testing, operations). Use when the user asks for a backend-fundamentals review or design opinion. The roadmap-review workflow also calls it.
+name: backend
+description: Backend specialist grounded in the roadmap.sh backend roadmap (APIs, databases, auth, caching, messaging, real-time, testing, operations). Use when the user asks for a backend-fundamentals review or design opinion. The specialist panel workflow also calls it.
 disallowedTools: Edit, Write, NotebookEdit
 color: blue
 ---

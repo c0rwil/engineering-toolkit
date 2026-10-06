@@ -1,6 +1,6 @@
 export const meta = {
-  name: 'roadmap-review',
-  description: 'Roadmap specialist panel (backend, performance, architecture, security): maps the repository with Graphify, picks only the specialists the work needs, then reviews a change, red-teams a design, or maps a codebase to the roadmap.sh roadmaps',
+  name: 'panel',
+  description: 'Specialist panel (backend, performance, architecture, security) grounded in the roadmap.sh roadmaps: maps the repository with Graphify, picks only the specialists the work needs, then reviews a change, red-teams a design, or maps a codebase to the roadmaps',
   whenToUse: 'A review of a change or path, a design decision before building, or a learning map of a codebase against the backend, backend-performance and software-architect roadmaps. args: {mode: "review" | "design" | "learn", target, focus, specialists, scope}; a plain string is a review target; specialists overrides the automatic panel; scope: false skips the map step and runs the full panel.',
   phases: [
     { title: 'Map', detail: 'Graphify map of the repository, context brief, and the specialists the work needs' },
@@ -10,17 +10,17 @@ export const meta = {
   ],
 }
 
-// Installed as the roadmap-panel plugin, agent types are namespaced
-// ("roadmap-panel:roadmap-security"); as user-level files they are not.
-const PLUGIN = 'roadmap-panel'
+// Agent types are namespaced by the plugin ("specialist-panel:security").
+// The bare names are generic, so they are never resolved outside it.
+const PLUGIN = 'specialist-panel'
 
 // The lenses and topic lists live in the agents' .md files, so the same
-// specialists also work on their own (e.g. @agent-roadmap-panel:roadmap-security).
+// specialists also work on their own (e.g. @agent-specialist-panel:security).
 const SPECIALISTS = [
-  { key: 'backend', agentType: 'roadmap-backend', title: 'Backend engineer', covers: 'backend fundamentals (APIs, databases, auth, caching, messaging, testing)', url: 'https://roadmap.sh/backend' },
-  { key: 'performance', agentType: 'roadmap-performance', title: 'Performance engineer', covers: 'performance and scale', url: 'https://roadmap.sh/backend-performance-best-practices' },
-  { key: 'architect', agentType: 'roadmap-architect', title: 'Software architect', covers: 'architecture, modularity and integration', url: 'https://roadmap.sh/software-architect' },
-  { key: 'security', agentType: 'roadmap-security', title: 'Security engineer', covers: 'security', url: 'https://roadmap.sh/backend and https://roadmap.sh/software-architect' },
+  { key: 'backend', agentType: 'backend', title: 'Backend engineer', covers: 'backend fundamentals (APIs, databases, auth, caching, messaging, testing)', url: 'https://roadmap.sh/backend' },
+  { key: 'performance', agentType: 'performance', title: 'Performance engineer', covers: 'performance and scale', url: 'https://roadmap.sh/backend-performance-best-practices' },
+  { key: 'architect', agentType: 'architect', title: 'Software architect', covers: 'architecture, modularity and integration', url: 'https://roadmap.sh/software-architect' },
+  { key: 'security', agentType: 'security', title: 'Security engineer', covers: 'security', url: 'https://roadmap.sh/backend and https://roadmap.sh/software-architect' },
 ]
 const LENS_KEYS = SPECIALISTS.map(s => s.key)
 
@@ -203,11 +203,18 @@ const BRIEF_SCHEMA = {
         required: ['lens', 'where', 'why'],
       },
     },
-    lenses: { type: 'array', description: 'Specialists the work needs, each with the reason', items: LENS_CHOICE },
+    changed_files: { type: 'integer', description: 'Files the change touches (review of a diff only); 0 when the target is not a diff' },
+    changed_lines: { type: 'integer', description: 'Added plus deleted lines (review of a diff only); 0 when the target is not a diff' },
+    lenses: { type: 'array', description: 'Specialists the work needs, most relevant first, each with the reason', items: LENS_CHOICE },
     skipped: { type: 'array', description: 'Specialists the work does not need, each with the reason', items: LENS_CHOICE },
   },
-  required: ['graph', 'scope', 'files', 'dependencies', 'standards', 'hotspots', 'lenses', 'skipped'],
+  required: ['graph', 'scope', 'files', 'dependencies', 'standards', 'hotspots', 'changed_files', 'changed_lines', 'lenses', 'skipped'],
 }
+
+// A focused diff gets one specialist. In measured runs on a 92-line, 3-file
+// change, two lenses raised 4 of their 6 findings twice, and either lens
+// alone found 5 of the 6 at about half the cost.
+const SMALL_CHANGE = { files: 3, lines: 150 }
 
 function parseArgs(raw) {
   if (typeof raw === 'string') {
@@ -247,7 +254,7 @@ function role(s) {
   // Compare by key: the runtime hands pipeline stages copies of the items.
   const others = panel.filter(o => o.key !== s.key).map(o => o.covers)
   const lens = others.length ? ` The rest of the panel covers ${others.join('; ')}, so stay in your lens.` : ''
-  return `You are the ${s.title} on a roadmap review panel.${lens}`
+  return `You are the ${s.title} on a specialist panel.${lens}`
 }
 
 // The shared brief plus only the hotspots meant for this lens.
@@ -267,17 +274,18 @@ async function runMap() {
     learn: "the repository's structure: modules, boundaries, data stores and integrations",
   }[mode]
   const chosen = requested ? `\n   The user already chose the panel (${requested.join(', ')}). Still give a reason for each lens; the choice stays the user's.` : ''
-  const brief = await agent(`You map the repository for a roadmap review panel. Map ${goal}, and decide which specialists the work needs.
+  const brief = await agent(`You map the repository for a specialist panel. Map ${goal}, and decide which specialists the work needs.
 
 Target: ${target}${focus}
 
 1. Graph. Work at the repository root (\`git rev-parse --show-toplevel\`). If the \`graphify\` command exists:
    - Refresh the graph: run \`graphify update .\` when graphify-out/graph.json exists, otherwise \`graphify extract . --code-only\`. Both parse code locally with tree-sitter: no API key, and nothing leaves the machine. Never run a semantic or docs pass.
-   - Keep graphify-out/ out of git: if \`git check-ignore -q graphify-out\` fails, append "graphify-out/" to .git/info/exclude.
+   - Keep graphify-out/ out of git: if \`git check-ignore -q graphify-out\` fails, append "graphify-out/" to the file \`git rev-parse --git-path info/exclude\` prints (.git/info/exclude; in a linked worktree .git is a file).
    - For the structure, read graphify-out/GRAPH_REPORT.md if it exists; otherwise run \`graphify god-nodes\`. Then run \`graphify query "<question>" --budget 1500\` and \`graphify explain "<symbol>"\` for the target's neighborhood.
    Set "graph" to "graphify". If the command is missing or fails, set "graph" to "none" and use git and rg instead.
 2. Scope. Identify the exact files and symbols involved, their callers and dependencies, and the project rules that apply (CLAUDE.md, CONTRIBUTING, ADRs). Treat graph output as leads and confirm each one in the code.
-3. Panel. Decide which specialists the work needs. Give a one-sentence reason for each lens you choose ("lenses") and for each you skip ("skipped"):
+   When the target is a diff (a change, commit or range), count it with \`git diff --shortstat\` over that range: files changed go in "changed_files", insertions plus deletions in "changed_lines". Otherwise set both to 0.
+3. Panel. Decide which specialists the work needs, and list the lenses most relevant first. Give a one-sentence reason for each lens you choose ("lenses") and for each you skip ("skipped"):
    - backend: APIs, request handling, data access, transactions, migrations, auth flows, caching, messaging, error contracts.
    - performance: hot paths, queries, I/O on request paths, concurrency, caching, payload sizes, resource limits.
    - architect: new modules or dependencies, public interfaces and contracts, boundaries, data ownership, integration patterns.
@@ -294,7 +302,8 @@ Map the target; do not review it. The specialists judge correctness, so record f
   return brief
 }
 
-// The user's list wins; otherwise the map decides; without a map, everyone.
+// The user's list wins; otherwise the map decides, and a small diff gets only
+// its most relevant lens; without a map, everyone.
 function choosePanel() {
   if (requested) {
     panel = SPECIALISTS.filter(s => requested.includes(s.key))
@@ -306,26 +315,33 @@ function choosePanel() {
     skipped = []
     return 'no map, so the full panel'
   }
-  const chosen = new Set(context.lenses.map(l => l.lens))
+  const ranked = context.lenses.map(l => l.lens)
+  const lines = Number(context.changed_lines) || 0
+  const files = Number(context.changed_files) || 0
+  const small = mode === 'review' && lines > 0 && lines <= SMALL_CHANGE.lines && files <= SMALL_CHANGE.files
+  const chosen = new Set(small ? ranked.slice(0, 1) : ranked)
   panel = SPECIALISTS.filter(s => chosen.has(s.key))
+  const size = `${lines} line${lines === 1 ? '' : 's'} in ${files} file${files === 1 ? '' : 's'}`
   const reasons = new Map(context.skipped.map(l => [l.lens, l.reason]))
+  for (const lens of ranked.filter(k => !chosen.has(k))) {
+    reasons.set(lens, `small change (${size}): one specialist covers it; pass specialists to add this lens`)
+  }
   skipped = SPECIALISTS.filter(s => !chosen.has(s.key)).map(s => ({ lens: s.key, reason: reasons.get(s.key) || 'not selected by the map' }))
-  return 'chosen by the map'
+  return small && ranked.length > 1 ? `chosen by the map, one specialist for a small change: ${size}` : 'chosen by the map'
 }
 
 // Sessions load agent types at startup, so a just-installed specialist may be
-// unknown here. Fall back to a default agent that adopts the same lens file.
+// unknown here. Fall back to a default agent that adopts the same lens file,
+// looked up inside this plugin's directories only (another plugin or a user
+// agent may well have a file named backend.md).
 async function runSpecialist(s, prompt, schema) {
-  let lastError = null
-  for (const agentType of [`${PLUGIN}:${s.agentType}`, s.agentType]) {
-    try {
-      return await agent(prompt, { label: s.key, phase: 'Specialists', agentType, schema })
-    } catch (e) {
-      lastError = e
-    }
+  const agentType = `${PLUGIN}:${s.agentType}`
+  try {
+    return await agent(prompt, { label: s.key, phase: 'Specialists', agentType, schema })
+  } catch (e) {
+    log(`${s.key}: ${agentType} unavailable (${e.message}); using the default agent with its lens file`)
   }
-  log(`${s.key}: ${s.agentType} unavailable (${lastError.message}); using the default agent with its lens file`)
-  const lens = `First print your lens with \`cat "$(find ~/.claude/agents ~/.claude/plugins/cache -path '*/agents/${s.agentType}.md' 2>/dev/null | head -1)"\` and adopt the role, topics and working rules in its body (ignore the frontmatter). If nothing prints, act as a senior ${s.title} applying ${s.url}. Never edit files.\n\n`
+  const lens = `First print your lens with \`cat "$(find ~/.claude/plugins -path '*/${PLUGIN}/*' -path '*/agents/${s.agentType}.md' 2>/dev/null | head -1)"\` and adopt the role, topics and working rules in its body (ignore the frontmatter). If nothing prints, act as a senior ${s.title} applying ${s.url}. Never edit files.\n\n`
   return agent(lens + prompt, { label: `${s.key} (fallback)`, phase: 'Specialists', schema }).catch(e => {
     log(`${s.key}: ${e.message}`)
     return null
@@ -368,14 +384,14 @@ Try to refute each one. Read the cited code, then decide:
 - confirmed: you read the code and the failure scenario holds.
 - plausible: the code allows it, but it depends on conditions you cannot check here (load, deployment, callers outside this repository).
 - refuted: the code does not do what the finding says; the scenario cannot happen; the issue lies outside the target; the fix costs more than the problem; or it contradicts a documented decision (ADR, CLAUDE.md, spec) without new evidence.
-If you cannot confirm a finding from the code, refute it. Set severity to what the evidence supports. Return one verdict per index.
+If you cannot confirm a finding from the code, refute it. Set severity to what the evidence supports: raise it when the reporter under-rated the impact (for example a secret that can leave the machine, or wasted work on every call of a hot path), and lower it when they over-rated it. Return one verdict per index.
 
 Findings:
 ${json(items)}`,
-  synth: ({ kept, doneWell, refutedCount }) => `You chair a roadmap review panel. The specialists reviewed: ${target}
+  synth: ({ kept, doneWell, refutedCount }) => `You chair a specialist review panel. The specialists reviewed: ${target}
 A skeptic checked every finding and refuted ${refutedCount}. Write the final report from this data only; do not add findings.
 
-Findings that survived. The verdict is confirmed or plausible when a skeptic checked the finding. It is unverified for low-severity findings, which skip the skeptic, and when the skeptic failed:
+Findings that survived. The verdict is confirmed or plausible when a skeptic checked the finding, and unverified when the skeptic failed:
 ${json(kept)}
 
 Done well:
@@ -439,16 +455,14 @@ async function runChecked(cfg) {
       const items = out[cfg.itemsKey] || []
       if (out.omitted) log(`${s.key}: left out ${out.omitted} lower-priority items (item limit)`)
       if (!items.length) return { s, out, kept: [], refuted: [] }
-      // Skeptics cost about as much as specialists, so they check only what
-      // matters: low findings stay unverified. Learn claims carry no
-      // severity and are all checked.
-      const toCheck = items.map((item, index) => ({ index, ...item })).filter(item => item.severity !== 'low')
-      const verdicts = toCheck.length
-        ? await agent(cfg.verify(s, toCheck), { label: `${s.key} verify`, phase: 'Challenge', schema: VERDICTS_SCHEMA, effort: 'medium' })
-        : null
+      // One skeptic per lens checks every finding, lows included: measured
+      // runs left real bugs that a specialist under-rated as unverified lows,
+      // and only a checked finding can be re-rated upward.
+      const toCheck = items.map((item, index) => ({ index, ...item }))
+      const verdicts = await agent(cfg.verify(s, toCheck), { label: `${s.key} verify`, phase: 'Challenge', schema: VERDICTS_SCHEMA, effort: 'medium' })
       const checked = applyVerdicts(items, verdicts)
-      const lows = items.length - toCheck.length
-      log(`${s.key}: ${items.length} raised, ${toCheck.length} checked, ${checked.kept.length} kept, ${checked.refuted.length} refuted${lows ? ` (${lows} low left unverified)` : ''}${toCheck.length && !verdicts ? ' (verifier failed, kept as unverified)' : ''}`)
+      const rerated = (verdicts ? verdicts.verdicts : []).filter(v => v.severity && items[v.index] && items[v.index].severity && v.severity !== items[v.index].severity).length
+      log(`${s.key}: ${items.length} raised, ${checked.kept.length} kept, ${checked.refuted.length} refuted${rerated ? `, ${rerated} re-rated` : ''}${verdicts ? '' : ' (verifier failed, kept as unverified)'}`)
       return { s, out, ...checked }
     },
   )

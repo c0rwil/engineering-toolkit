@@ -1,12 +1,12 @@
-// Deterministic harness for workflows/roadmap-review.js: runs the script body
+// Deterministic harness for workflows/panel.js: runs the script body
 // against mocked agent()/parallel()/pipeline() and checks the orchestration.
-// No tokens, no network:  node tests/roadmap-review.test.mjs
+// No tokens, no network:  node tests/panel.test.mjs
 // Point WF_PATH at another copy to test it (e.g. a deliberately broken one).
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 
-const path = process.env.WF_PATH || fileURLToPath(new URL('../workflows/roadmap-review.js', import.meta.url))
+const path = process.env.WF_PATH || fileURLToPath(new URL('../workflows/panel.js', import.meta.url))
 const src = readFileSync(path, 'utf8')
 
 // --- static checks -----------------------------------------------------------
@@ -24,8 +24,7 @@ const AsyncFunction = (async () => {}).constructor
 const script = new AsyncFunction('agent', 'parallel', 'pipeline', 'phase', 'log', 'args', 'budget', 'workflow', `"use strict";\n${src.slice(m[0].length)}`)
 
 const KEYS = ['backend', 'performance', 'architect', 'security']
-const PLUGIN_TYPES = KEYS.map(k => `roadmap-panel:roadmap-${k}`)
-const USER_TYPES = KEYS.map(k => `roadmap-${k}`)
+const PLUGIN_TYPES = KEYS.map(k => `specialist-panel:${k}`)
 
 function validateSchema(schema, at = 'root') {
   if (at === 'root') assert.equal(schema.type, 'object', 'root schema must be an object')
@@ -100,14 +99,17 @@ async function run(args, { knownTypes = PLUGIN_TYPES, nullLabels = [], throwLabe
 
 const labels = r => r.calls.map(c => c.label).sort()
 const prompt = (r, label) => r.calls.find(c => c.label === label).prompt
-// A map that selects some lenses and skips the rest, with hotspots.
-const map = ({ lenses = KEYS, graph = 'graphify', hotspots = [] } = {}) => () => ({
+// A map that selects some lenses (most relevant first) and skips the rest,
+// with hotspots and the diff's size.
+const map = ({ lenses = KEYS, graph = 'graphify', hotspots = [], changed_files = 0, changed_lines = 0 } = {}) => () => ({
   graph,
   scope: 'src/api/upload.rs handle_upload',
   files: [{ path: 'src/api/upload.rs', why: 'changed' }],
   dependencies: [{ symbol: 'handle_upload', relation: 'calls storage::put_object', where: 'src/api/upload.rs:42' }],
   standards: ['MUST: check tenant ownership before every object read (CONTRIBUTING.md)'],
   hotspots,
+  changed_files,
+  changed_lines,
   lenses: lenses.map(lens => ({ lens, reason: `${lens} applies here` })),
   skipped: KEYS.filter(k => !lenses.includes(k)).map(lens => ({ lens, reason: `no ${lens} surface in this change` })),
 })
@@ -122,49 +124,66 @@ await test('review defaults: map, 4 plugin specialists, 4 verifiers, 1 chair', a
   assert.deepEqual(labels(r), ['architect', 'architect verify', 'backend', 'backend verify', 'chair', 'map', 'performance', 'performance verify', 'security', 'security verify'])
   assert.deepEqual(r.calls.filter(c => c.phase === 'Specialists').map(c => c.agentType).sort(), [...PLUGIN_TYPES].sort())
   assert.equal(r.result.mode, 'review')
-  // Per lens the fake raises high, medium and low findings: the skeptic sees
-  // the first two (confirmed, plausible) and the low one stays unverified.
-  assert.equal(r.result.kept.length, 12)
-  assert.equal(r.result.refuted.length, 0)
+  // Per lens the fake raises high, medium and low findings, and the skeptic
+  // answers confirmed, plausible and refuted in turn.
+  assert.equal(r.result.kept.length, 8)
+  assert.equal(r.result.refuted.length, 4)
   assert.deepEqual(r.result.missing, [])
   assert.deepEqual(r.result.skipped, [])
   assert.match(prompt(r, 'backend'), /git diff HEAD/)
   assert.match(prompt(r, 'backend'), /rest of the panel covers/)
-  assert.match(prompt(r, 'chair'), /refuted 0/)
-  assert.match(prompt(r, 'chair'), /low-severity findings, which skip the skeptic/)
+  assert.match(prompt(r, 'chair'), /refuted 4/)
+  assert.match(prompt(r, 'chair'), /unverified when the skeptic failed/)
+  assert(!prompt(r, 'chair').includes('skip the skeptic'))
   assert(!prompt(r, 'chair').includes('Lenses not on the panel'))
 })
 
-await test('low findings skip the skeptic, which runs at medium effort', async () => {
+await test('every finding goes to the skeptic, which runs at medium effort', async () => {
   const r = await run(undefined)
   const verify = r.calls.find(c => c.label === 'backend verify')
   assert.equal(verify.effort, 'medium')
-  assert.match(verify.prompt, /"index": 1/)
-  assert(!verify.prompt.includes('"index": 2'), 'a low finding was sent to the skeptic')
-  const backend = r.result.kept.filter(f => f.lens === 'backend')
-  assert.deepEqual(backend.map(f => `${f.severity}:${f.verdict}`), ['high:confirmed', 'medium:plausible', 'low:unverified'])
-  assert(r.logs.includes('backend: 3 raised, 2 checked, 3 kept, 0 refuted (1 low left unverified)'))
+  assert.match(verify.prompt, /"index": 2/)
+  assert.match(verify.prompt, /raise it when the reporter under-rated the impact/)
+  const kept = r.result.kept.filter(f => f.lens === 'backend')
+  assert.deepEqual(kept.map(f => `${f.severity}:${f.verdict}`), ['high:confirmed', 'medium:plausible'])
+  const refuted = r.result.refuted.filter(f => f.lens === 'backend')
+  assert.deepEqual(refuted.map(f => `${f.severity}:${f.verdict}`), ['low:refuted'])
+  assert(r.logs.includes('backend: 3 raised, 2 kept, 1 refuted'))
 })
 
 await test('a refuted finding leaves the report', async () => {
   const r = await run(undefined, {
     override: { 'backend verify': () => ({ verdicts: [{ index: 0, verdict: 'refuted', reason: 'cannot happen' }, { index: 1, verdict: 'confirmed', reason: 'read it' }] }) },
   })
-  assert.deepEqual(r.result.refuted.map(f => `${f.lens}:${f.title}`), ['backend:title-0'])
+  assert.deepEqual(r.result.refuted.filter(f => f.lens === 'backend').map(f => f.title), ['title-0'])
   assert(!r.result.kept.some(f => f.lens === 'backend' && f.title === 'title-0'))
-  assert.match(prompt(r, 'chair'), /refuted 1/)
+  assert.match(prompt(r, 'chair'), /refuted 4/) // 1 here, plus each other lens's third finding
 })
 
-await test('when every finding is low, no skeptic runs', async () => {
+await test('an under-rated low finding is checked and re-rated upward', async () => {
   const lowOnly = s => {
     const out = fake(s)
     out.findings = out.findings.map(f => ({ ...f, severity: 'low' }))
     return out
   }
-  const r = await run(undefined, { override: { backend: lowOnly } })
-  assert(!r.calls.some(c => c.label === 'backend verify'))
-  assert(r.result.kept.filter(f => f.lens === 'backend').every(f => f.verdict === 'unverified'))
-  assert(r.logs.includes('backend: 3 raised, 0 checked, 3 kept, 0 refuted (3 low left unverified)'))
+  const r = await run(undefined, {
+    override: {
+      backend: lowOnly,
+      'backend verify': () => ({
+        verdicts: [
+          { index: 0, verdict: 'confirmed', severity: 'high', reason: 'the linked secret lands in the tracked tree' },
+          { index: 1, verdict: 'confirmed', reason: 'read it' },
+          { index: 2, verdict: 'refuted', reason: 'cannot happen' },
+        ],
+      }),
+    },
+  })
+  const verify = r.calls.find(c => c.label === 'backend verify')
+  assert(verify, 'low findings must reach the skeptic')
+  assert.match(verify.prompt, /"index": 2/)
+  const backend = r.result.kept.filter(f => f.lens === 'backend')
+  assert.deepEqual(backend.map(f => `${f.title}:${f.severity}:${f.verdict}`), ['title-0:high:confirmed', 'title-1:low:confirmed'])
+  assert(r.logs.includes('backend: 3 raised, 2 kept, 1 refuted, 1 re-rated'))
   assert(!r.logs.some(l => l.startsWith('backend:') && l.includes('verifier failed')))
 })
 
@@ -174,9 +193,11 @@ await test('the map runs Graphify locally and stays a map', async () => {
   assert.match(p, /graphify update \./)
   assert.match(p, /graphify extract \. --code-only/)
   assert.match(p, /Never run a semantic or docs pass/)
-  assert.match(p, /\.git\/info\/exclude/)
+  assert.match(p, /`git rev-parse --git-path info\/exclude` prints/) // .git is a file in linked worktrees
   assert.match(p, /graphify query/)
   assert.match(p, /otherwise run `graphify god-nodes`/)
+  assert.match(p, /git diff --shortstat/)
+  assert.match(p, /most relevant first/)
   assert.match(p, /do not review it/)
   assert.equal(r.calls.find(c => c.label === 'map').effort, 'medium')
   assert(r.logs.some(l => l.startsWith('map: Graphify ·')))
@@ -213,6 +234,38 @@ await test('the user list overrides the map', async () => {
   assert.match(prompt(r, 'map'), /The user already chose the panel \(architect\)/)
   assert.deepEqual(r.result.skipped.map(s => s.reason), ['not requested', 'not requested', 'not requested'])
   assert(r.logs.some(l => l.includes('(chosen by you)')))
+})
+
+await test("a small diff runs only the map's most relevant lens", async () => {
+  const r = await run(undefined, { override: { map: map({ lenses: ['security', 'backend', 'performance'], changed_lines: 92, changed_files: 3 }) } })
+  assert.deepEqual(labels(r), ['chair', 'map', 'security', 'security verify'])
+  assert.deepEqual(r.result.panel, ['security'])
+  const reasons = Object.fromEntries(r.result.skipped.map(s => [s.lens, s.reason]))
+  assert.equal(reasons.backend, 'small change (92 lines in 3 files): one specialist covers it; pass specialists to add this lens')
+  assert.match(reasons.performance, /^small change/)
+  assert.equal(reasons.architect, 'no architect surface in this change')
+  assert(r.logs.includes('panel: security (chosen by the map, one specialist for a small change: 92 lines in 3 files) · skipped backend, performance, architect'))
+  assert.match(prompt(r, 'chair'), /small change \(92 lines in 3 files\)/)
+  assert(!prompt(r, 'security').includes('rest of the panel'), 'a solo specialist should not mention a panel')
+})
+
+await test('the small-diff cap leaves larger diffs, user lists, non-diffs and other modes alone', async () => {
+  const lenses = ['backend', 'performance']
+  const cases = [
+    [undefined, { lenses, changed_lines: 151, changed_files: 3 }],
+    [undefined, { lenses, changed_lines: 40, changed_files: 4 }],
+    ['src/storage', { lenses, changed_lines: 0, changed_files: 0 }],
+    [{ specialists: 'backend,performance' }, { lenses: ['security'], changed_lines: 10, changed_files: 1 }],
+    [{ mode: 'learn' }, { lenses, changed_lines: 10, changed_files: 1 }],
+  ]
+  for (const [args, brief] of cases) {
+    const r = await run(args, { override: { map: map(brief) } })
+    assert.deepEqual(r.result.panel.sort(), lenses, `capped: ${JSON.stringify(args)} ${JSON.stringify(brief)}`)
+  }
+  const one = await run(undefined, { override: { map: map({ lenses: ['backend'], changed_lines: 10, changed_files: 1 }) } })
+  assert(one.logs.includes('panel: backend (chosen by the map) · skipped performance, architect, security'), 'one chosen lens needs no cap note')
+  const single = await run(undefined, { override: { map: map({ lenses: ['security', 'backend'], changed_lines: 1, changed_files: 1 }) } })
+  assert(single.logs.some(l => l.includes('small change: 1 line in 1 file)')))
 })
 
 await test('a failed map falls back to the full panel', async () => {
@@ -263,11 +316,13 @@ await test('without Graphify the map says so and suggests installing it', async 
   assert.match(prompt(r, 'security'), /Context brief \(from git and the code/)
 })
 
-await test('user-level agents resolve by their bare name', async () => {
-  const r = await run(undefined, { knownTypes: USER_TYPES })
-  assert.deepEqual(r.calls.filter(c => c.phase === 'Specialists').map(c => c.agentType).sort(), [...USER_TYPES].sort())
-  assert.equal(r.attempts.filter(c => c.thrown).length, 4) // one namespaced miss each
-  assert(!r.calls.some(c => c.label.endsWith('(fallback)')))
+await test('generic bare agent names are never resolved outside the plugin', async () => {
+  // A user agent or another plugin may define "security"; it must not stand in.
+  const r = await run(undefined, { knownTypes: [...PLUGIN_TYPES, ...KEYS] })
+  assert.deepEqual(r.calls.filter(c => c.phase === 'Specialists').map(c => c.agentType).sort(), [...PLUGIN_TYPES].sort())
+  const missing = await run(undefined, { knownTypes: KEYS })
+  assert(!missing.attempts.some(c => KEYS.includes(c.agentType)), 'a bare agent type was tried')
+  assert.equal(missing.calls.filter(c => c.label.endsWith('(fallback)')).length, 4)
 })
 
 await test('with no specialists installed, each falls back to its lens file', async () => {
@@ -275,16 +330,16 @@ await test('with no specialists installed, each falls back to its lens file', as
   assert.equal(r.calls.filter(c => c.label.endsWith('(fallback)')).length, 4)
   const perf = prompt(r, 'performance (fallback)')
   assert.equal(r.calls.find(c => c.label === 'performance (fallback)').agentType, undefined)
-  assert(perf.startsWith("First print your lens with `cat \"$(find ~/.claude/agents ~/.claude/plugins/cache -path '*/agents/roadmap-performance.md'"))
+  assert(perf.startsWith("First print your lens with `cat \"$(find ~/.claude/plugins -path '*/specialist-panel/*' -path '*/agents/performance.md'"))
   assert.match(perf, /Target: /)
   assert.deepEqual(r.result.missing, [])
-  assert(r.logs.some(l => l.includes("roadmap-performance unavailable (agent type 'roadmap-performance' not found)")))
+  assert(r.logs.some(l => l.includes("specialist-panel:performance unavailable (agent type 'specialist-panel:performance' not found)")))
 })
 
 await test('specialist and fallback both failing is reported, not fatal', async () => {
   const r = await run(undefined, { knownTypes: PLUGIN_TYPES.filter(t => !t.endsWith('performance')), throwLabels: ['performance (fallback)'] })
   assert.deepEqual(r.result.missing, ['performance'])
-  assert(r.logs.some(l => l.includes('check that the roadmap-performance agent is installed')))
+  assert(r.logs.some(l => l.includes('check that the performance agent is installed')))
   assert(!r.calls.some(c => c.label === 'performance verify'))
   const skippedRun = await run(undefined, { nullLabels: ['performance'] })
   assert(!skippedRun.calls.some(c => c.label === 'performance (fallback)'), 'a skipped (null) specialist must not be re-run')

@@ -1,6 +1,6 @@
 ---
-name: roadmap-security
-description: Security specialist grounded in the web-security topics of the roadmap.sh backend roadmap and the security topics of the software-architect roadmap (OWASP risks, authn/authz, cryptography, secrets, web and server security). Use when the user asks for a security review or design opinion. The roadmap-review workflow also calls it.
+name: security
+description: Security specialist grounded in the web-security topics of the roadmap.sh backend roadmap and the security topics of the software-architect roadmap (OWASP risks, authn/authz, cryptography, secrets, web and server security). Use when the user asks for a security review or design opinion. The specialist panel workflow also calls it.
 disallowedTools: Edit, Write, NotebookEdit
 color: red
 ---

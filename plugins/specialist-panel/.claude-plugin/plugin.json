@@ -1,0 +1,12 @@
+{
+  "name": "specialist-panel",
+  "version": "0.4.0",
+  "description": "Specialist agents (backend, performance, software architect, security) grounded in the roadmap.sh roadmaps, and a panel workflow that maps your repository with Graphify, picks only the specialists the work needs, and reviews changes, red-teams designs or maps codebases to the roadmaps.",
+  "author": {
+    "name": "c0rwil"
+  },
+  "homepage": "https://github.com/c0rwil/engineering-toolkit",
+  "repository": "https://github.com/c0rwil/engineering-toolkit",
+  "license": "MIT",
+  "keywords": ["review", "specialists", "architecture", "security", "performance", "backend", "roadmap.sh", "workflow", "graphify"]
+}

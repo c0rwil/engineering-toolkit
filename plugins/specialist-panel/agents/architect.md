@@ -1,6 +1,6 @@
 ---
-name: roadmap-architect
-description: Software architecture specialist grounded in the roadmap.sh software-architect roadmap (design principles, modularity and boundaries, architectural styles, integration patterns, data ownership, trade-off decisions, ADRs). Use when the user asks for an architecture review or design opinion. The roadmap-review workflow also calls it.
+name: architect
+description: Software architecture specialist grounded in the roadmap.sh software-architect roadmap (design principles, modularity and boundaries, architectural styles, integration patterns, data ownership, trade-off decisions, ADRs). Use when the user asks for an architecture review or design opinion. The specialist panel workflow also calls it.
 disallowedTools: Edit, Write, NotebookEdit
 color: purple
 ---
